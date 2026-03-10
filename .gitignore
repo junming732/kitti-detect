@@ -1,0 +1,65 @@
+# ── Virtual Environment ───────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+ENV/
+setup:env.sh
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ── Data (large files — stored in nobackup, not in git) ───────────────────────
+data/kitti/
+data/kitti_yolo/
+data/*.zip
+data/*.tar
+data/*.tar.gz
+data/*.bin
+*.png
+*.jpg
+*.jpeg
+*.mp4
+*.avi
+*.mkv
+
+# ── Model Weights & Checkpoints ───────────────────────────────────────────────
+runs/
+*.pt
+*.pth
+*.onnx
+*.engine
+*.trt
+*.safetensors
+wandb/
+
+# ── Results (generated outputs) ───────────────────────────────────────────────
+results/
+
+# ── IDE & OS ──────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Secrets & Credentials ─────────────────────────────────────────────────────
+.env
+*.key
+kaggle.json
+
+# ── SLURM / HPC job logs ──────────────────────────────────────────────────────
+*.out
+*.err
+slurm-*.out
