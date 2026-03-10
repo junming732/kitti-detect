@@ -25,7 +25,7 @@ import torch
 from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from utils.kitti_parser import CLASS_NAMES, parse_kitti_split
+from utils.kitti_parser import CLASS_NAMES, parse_kitti_folder
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -151,10 +151,11 @@ def compute_map(
 # ─────────────────────────────────────────────────────────────────────────────
 
 class KITTIEvaluator:
-    def __init__(self, images_dir: str, labels_dir: str, conf: float = 0.25, iou: float = 0.5):
+    def __init__(self, conf: float = 0.25, iou: float = 0.5):
+        from utils.paths import KITTI_RAW_IMAGES, KITTI_RAW_LABELS
         self.conf = conf
         self.iou_threshold = iou
-        self.samples = parse_kitti_split(images_dir, labels_dir)
+        self.samples = parse_kitti_folder(str(KITTI_RAW_IMAGES), str(KITTI_RAW_LABELS))
 
         # Build GT dictionary
         self.ground_truths = {}
@@ -251,8 +252,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate KITTI object detection models")
     parser.add_argument("--model",       type=str, required=True, choices=["yolo", "detr"])
     parser.add_argument("--weights",     type=str, required=True)
-    parser.add_argument("--images-val",  type=str, required=True)
-    parser.add_argument("--labels-val",  type=str, required=True)
+    # paths come from utils/paths.py
     parser.add_argument("--conf",        type=float, default=0.25)
     parser.add_argument("--iou",         type=float, default=0.5)
     parser.add_argument("--device",      type=str, default="0")
@@ -263,10 +263,7 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    evaluator = KITTIEvaluator(
-        args.images_val, args.labels_val,
-        conf=args.conf, iou=args.iou,
-    )
+    evaluator = KITTIEvaluator(conf=args.conf, iou=args.iou)
 
     if args.model == "yolo":
         preds = evaluator.run_yolo(args.weights, args.device)

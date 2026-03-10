@@ -1,14 +1,16 @@
 """
 data/kitti_dataset.py
 
-PyTorch Dataset classes for KITTI object detection.
-Supports both YOLOv8 (via Ultralytics) and DETR (via HuggingFace Transformers).
+PyTorch Dataset for KITTI object detection.
+
+Paths come from utils/paths.py (which reads .env) — no arguments needed.
+The train/val split is handled internally; no split directories on disk.
 """
 
 import os
-import json
+import random
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -17,12 +19,10 @@ from PIL import Image
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
-# Local imports
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from utils.kitti_parser import (
-    parse_kitti_split, KITTI_CLASSES, CLASS_NAMES
-)
+from utils.kitti_parser import parse_kitti_label_file, CLASS_NAMES
+from utils.paths import KITTI_RAW_IMAGES, KITTI_RAW_LABELS, KITTI_YOLO_DIR
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -30,230 +30,252 @@ from utils.kitti_parser import (
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_train_transforms(img_size: int = 640) -> A.Compose:
-    """Albumentations pipeline for training with bbox-aware augmentations."""
     return A.Compose([
         A.LongestMaxSize(max_size=img_size),
-        A.PadIfNeeded(
-            min_height=img_size, min_width=img_size,
-            border_mode=0, value=(114, 114, 114)
-        ),
+        A.PadIfNeeded(min_height=img_size, min_width=img_size,
+                      border_mode=0, fill=(114, 114, 114)),
         A.HorizontalFlip(p=0.5),
         A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),
-        A.GaussNoise(var_limit=(10, 50), p=0.2),
-        A.RandomFog(fog_coef_lower=0.05, fog_coef_upper=0.15, p=0.1),  # Driving realism
+        A.GaussNoise(std_range=(0.02, 0.1), p=0.2),
+        A.RandomFog(fog_coef_lower=0.05, fog_coef_upper=0.15, p=0.1),
         A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
         ToTensorV2(),
     ], bbox_params=A.BboxParams(
-        format="pascal_voc",
-        label_fields=["class_labels"],
-        min_visibility=0.3,
+        format="pascal_voc", label_fields=["class_labels"], min_visibility=0.3
     ))
 
 
 def get_val_transforms(img_size: int = 640) -> A.Compose:
-    """Validation pipeline — resize + normalize only."""
     return A.Compose([
         A.LongestMaxSize(max_size=img_size),
-        A.PadIfNeeded(
-            min_height=img_size, min_width=img_size,
-            border_mode=0, value=(114, 114, 114)
-        ),
+        A.PadIfNeeded(min_height=img_size, min_width=img_size,
+                      border_mode=0, fill=(114, 114, 114)),
         A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
         ToTensorV2(),
     ], bbox_params=A.BboxParams(
-        format="pascal_voc",
-        label_fields=["class_labels"],
-        min_visibility=0.3,
+        format="pascal_voc", label_fields=["class_labels"], min_visibility=0.3
     ))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Base KITTI Dataset
+# Split helper — in memory, no disk writes
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_split_ids(
+    images_dir: Path,
+    split: str = "train",
+    val_ratio: float = 0.2,
+    seed: int = 42,
+) -> List[str]:
+    """
+    Shuffle all image IDs with a fixed seed and return the train or val slice.
+    No files are written to disk.
+    """
+    all_ids = sorted(p.stem for p in images_dir.glob("*.png"))
+    if not all_ids:
+        raise FileNotFoundError(f"No .png images found in {images_dir}")
+
+    rng = random.Random(seed)
+    rng.shuffle(all_ids)
+
+    n_val   = int(len(all_ids) * val_ratio)
+    ids     = all_ids[:n_val] if split == "val" else all_ids[n_val:]
+    print(f"[KITTIDataset] '{split}': {len(ids)} / {len(all_ids)} images")
+    return ids
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dataset
 # ─────────────────────────────────────────────────────────────────────────────
 
 class KITTIDataset(Dataset):
     """
-    Base PyTorch Dataset for KITTI object detection.
+    KITTI 2D object detection dataset.
 
-    Args:
-        images_dir:   Path to KITTI image directory (e.g., training/image_2).
-        labels_dir:   Path to KITTI label directory (e.g., training/label_2).
-        split:        'train' or 'val'
-        img_size:     Target image size for resizing.
-        transforms:   Optional Albumentations Compose pipeline.
+    Reads paths from utils/paths.py — no arguments needed in most cases.
+
+    Example:
+        train_ds = KITTIDataset(split="train")
+        val_ds   = KITTIDataset(split="val")
+
+    Override paths only if needed:
+        ds = KITTIDataset(split="train",
+                          images_dir="/custom/path/image_2",
+                          labels_dir="/custom/path/label_2")
     """
 
     def __init__(
         self,
-        images_dir: str,
-        labels_dir: str,
         split: str = "train",
+        images_dir: Optional[Path] = None,
+        labels_dir: Optional[Path] = None,
+        val_ratio: float = 0.2,
+        seed: int = 42,
         img_size: int = 640,
         transforms: Optional[A.Compose] = None,
+        min_bbox_area: float = 100.0,
+        max_truncation: float = 0.8,
+        max_occlusion: int = 2,
     ):
         super().__init__()
-        self.img_size = img_size
-        self.split = split
+        # Fall back to paths.py if not explicitly given
+        self.images_dir     = Path(images_dir) if images_dir else KITTI_RAW_IMAGES
+        self.labels_dir     = Path(labels_dir) if labels_dir else KITTI_RAW_LABELS
+        self.split          = split
+        self.img_size       = img_size
+        self.min_bbox_area  = min_bbox_area
+        self.max_truncation = max_truncation
+        self.max_occlusion  = max_occlusion
 
-        # Parse all samples
-        self.samples = parse_kitti_split(
-            images_dir=images_dir,
-            labels_dir=labels_dir,
-            min_bbox_area=100.0,
-            max_truncation=0.8,
-            max_occlusion=2,
+        self.ids = get_split_ids(self.images_dir, split, val_ratio, seed)
+
+        self.transforms = transforms or (
+            get_train_transforms(img_size) if split == "train"
+            else get_val_transforms(img_size)
         )
-        print(f"[KITTIDataset] {split}: {len(self.samples)} images loaded.")
-
-        # Default transforms
-        if transforms is not None:
-            self.transforms = transforms
-        elif split == "train":
-            self.transforms = get_train_transforms(img_size)
-        else:
-            self.transforms = get_val_transforms(img_size)
 
     def __len__(self) -> int:
-        return len(self.samples)
+        return len(self.ids)
+
+    def _load_objects(self, image_id: str) -> Tuple[List, List]:
+        label_path = self.labels_dir / f"{image_id}.txt"
+        if not label_path.exists():
+            return [], []
+        bboxes, class_ids = [], []
+        for obj in parse_kitti_label_file(str(label_path)):
+            if not obj.is_valid:
+                continue
+            if obj.truncated > self.max_truncation:
+                continue
+            if obj.occluded > self.max_occlusion:
+                continue
+            x1, y1, x2, y2 = obj.bbox
+            if (x2 - x1) * (y2 - y1) < self.min_bbox_area:
+                continue
+            bboxes.append(list(obj.bbox))
+            class_ids.append(obj.class_id)
+        return bboxes, class_ids
 
     def __getitem__(self, idx: int) -> Dict:
-        sample = self.samples[idx]
-        image = np.array(Image.open(sample["image_path"]).convert("RGB"))
-        h, w = image.shape[:2]
+        image_id   = self.ids[idx]
+        image_path = self.images_dir / f"{image_id}.png"
+        image      = np.array(Image.open(image_path).convert("RGB"))
+        h, w       = image.shape[:2]
 
-        bboxes = [list(obj.bbox) for obj in sample["objects"]]   # [x1,y1,x2,y2]
-        labels = [obj.class_id for obj in sample["objects"]]
-
-        # Apply transforms
-        if bboxes:
-            aug = self.transforms(
-                image=image, bboxes=bboxes, class_labels=labels
-            )
-            image = aug["image"]
-            bboxes = list(aug["bboxes"])
-            labels = list(aug["class_labels"])
-        else:
-            aug = self.transforms(image=image, bboxes=[], class_labels=[])
-            image = aug["image"]
+        bboxes, class_ids = self._load_objects(image_id)
+        aug = self.transforms(
+            image=image,
+            bboxes=bboxes or [],
+            class_labels=class_ids or [],
+        )
 
         return {
-            "image": image,                                    # Tensor [C, H, W]
-            "boxes": torch.tensor(bboxes, dtype=torch.float32),
-            "labels": torch.tensor(labels, dtype=torch.long),
-            "image_id": sample["image_id"],
-            "image_path": sample["image_path"],
-            "orig_size": (h, w),
+            "image":      aug["image"],
+            "boxes":      torch.tensor(list(aug["bboxes"]),    dtype=torch.float32),
+            "labels":     torch.tensor(list(aug["class_labels"]), dtype=torch.long),
+            "image_id":   image_id,
+            "image_path": str(image_path),
+            "orig_size":  (h, w),
         }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DETR-compatible Dataset (HuggingFace format)
+# DETR-compatible Dataset
 # ─────────────────────────────────────────────────────────────────────────────
 
 class KITTIDatasetDETR(KITTIDataset):
-    """
-    KITTI dataset formatted for HuggingFace DETR.
-    Returns targets in COCO-style format expected by DetrForObjectDetection.
-    """
+    """KITTIDataset returning COCO-style cxcywh normalised targets for DETR."""
 
-    def __getitem__(self, idx: int) -> Dict:
-        base = super().__getitem__(idx)
-        h, w = base["orig_size"]
-        boxes = base["boxes"]  # [N, 4] in pixel (x1,y1,x2,y2) after resize
+    def __getitem__(self, idx: int) -> Tuple:
+        base  = super().__getitem__(idx)
+        h, w  = base["orig_size"]
+        boxes = base["boxes"]
 
-        # DETR expects COCO format: [cx, cy, w, h] normalized
         if len(boxes) > 0:
-            new_h, new_w = self.img_size, self.img_size
-            cx = (boxes[:, 0] + boxes[:, 2]) / 2 / new_w
-            cy = (boxes[:, 1] + boxes[:, 3]) / 2 / new_h
-            bw = (boxes[:, 2] - boxes[:, 0]) / new_w
-            bh = (boxes[:, 3] - boxes[:, 1]) / new_h
+            s      = float(self.img_size)
+            cx     = (boxes[:, 0] + boxes[:, 2]) / 2 / s
+            cy     = (boxes[:, 1] + boxes[:, 3]) / 2 / s
+            bw     = (boxes[:, 2] - boxes[:, 0]) / s
+            bh     = (boxes[:, 3] - boxes[:, 1]) / s
             cxcywh = torch.stack([cx, cy, bw, bh], dim=1).clamp(0, 1)
         else:
             cxcywh = torch.zeros((0, 4), dtype=torch.float32)
 
         target = {
-            "image_id": torch.tensor([idx]),
-            "boxes": cxcywh,
+            "image_id":     torch.tensor([idx]),
+            "boxes":        cxcywh,
             "class_labels": base["labels"],
-            "orig_size": torch.tensor([h, w]),
-            "size": torch.tensor([self.img_size, self.img_size]),
+            "orig_size":    torch.tensor([h, w]),
+            "size":         torch.tensor([self.img_size, self.img_size]),
         }
         return base["image"], target
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# YOLO Dataset Converter (writes files to disk)
+# YOLO format converter
 # ─────────────────────────────────────────────────────────────────────────────
 
-def convert_kitti_to_yolo(
-    images_dir: str,
-    labels_dir: str,
-    output_dir: str,
-    split: str = "train",
-) -> None:
+def convert_kitti_to_yolo(split: str = "train", val_ratio: float = 0.2, seed: int = 42) -> None:
     """
-    Convert KITTI annotations to YOLO format and write to output_dir.
+    Convert KITTI annotations to YOLO format on disk.
+    Reads/writes paths from paths.py — no arguments needed.
 
-    Creates:
-        output_dir/images/{split}/*.png  (symlinks or copies)
-        output_dir/labels/{split}/*.txt  (YOLO format labels)
+    Usage:
+        python -c "from data.kitti_dataset import convert_kitti_to_yolo; convert_kitti_to_yolo('train')"
+        python -c "from data.kitti_dataset import convert_kitti_to_yolo; convert_kitti_to_yolo('val')"
     """
-    from PIL import Image as PILImage
     import shutil
 
-    images_out = Path(output_dir) / "images" / split
-    labels_out = Path(output_dir) / "labels" / split
+    ids        = get_split_ids(KITTI_RAW_IMAGES, split, val_ratio, seed)
+    images_out = KITTI_YOLO_DIR / "images" / split
+    labels_out = KITTI_YOLO_DIR / "labels" / split
     images_out.mkdir(parents=True, exist_ok=True)
     labels_out.mkdir(parents=True, exist_ok=True)
 
-    samples = parse_kitti_split(images_dir, labels_dir)
-    skipped = 0
+    for image_id in ids:
+        img_path = KITTI_RAW_IMAGES / f"{image_id}.png"
+        lbl_path = KITTI_RAW_LABELS / f"{image_id}.txt"
 
-    for sample in samples:
-        img_path = Path(sample["image_path"])
-        img = PILImage.open(img_path)
-        img_w, img_h = img.size
+        from PIL import Image as PILImage
+        img_w, img_h = PILImage.open(img_path).size
 
-        # Write label file
-        label_lines = []
-        for obj in sample["objects"]:
-            line = obj.to_yolo_format(img_w, img_h)
-            if line:
-                label_lines.append(line)
+        objects = parse_kitti_label_file(str(lbl_path)) if lbl_path.exists() else []
+        lines   = [obj.to_yolo_format(img_w, img_h) for obj in objects
+                   if obj.is_valid and obj.to_yolo_format(img_w, img_h)]
 
-        label_out_path = labels_out / f"{sample['image_id']}.txt"
-        with open(label_out_path, "w") as f:
-            f.write("\n".join(label_lines))
+        with open(labels_out / f"{image_id}.txt", "w") as f:
+            f.write("\n".join(lines))
 
-        # Symlink image (saves disk space)
-        img_out_path = images_out / img_path.name
-        if not img_out_path.exists():
+        dst = images_out / img_path.name
+        if not dst.exists():
             try:
-                os.symlink(img_path.resolve(), img_out_path)
-            except Exception:
-                shutil.copy2(str(img_path), str(img_out_path))
+                os.symlink(img_path.resolve(), dst)
+            except OSError:
+                shutil.copy2(str(img_path), str(dst))
 
-    print(f"[convert_kitti_to_yolo] Converted {len(samples)} samples → {output_dir}")
-    if skipped:
-        print(f"  Skipped {skipped} samples with no valid labels.")
+    print(f"[convert_kitti_to_yolo] '{split}': {len(ids)} samples → {KITTI_YOLO_DIR}")
 
 
 def collate_fn_detr(batch):
-    """Custom collate for variable-size DETR targets."""
     images, targets = zip(*batch)
-    images = torch.stack(images, dim=0)
-    return images, list(targets)
+    return torch.stack(images), list(targets)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Smoke-test  —  python data/kitti_dataset.py
+# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) >= 4:
-        convert_kitti_to_yolo(
-            images_dir=sys.argv[1],
-            labels_dir=sys.argv[2],
-            output_dir=sys.argv[3],
-            split=sys.argv[4] if len(sys.argv) > 4 else "train",
-        )
-    else:
-        print("Usage: python kitti_dataset.py <images_dir> <labels_dir> <output_dir> [split]")
+    from utils.paths import print_paths
+    print_paths()
+
+    train_ds = KITTIDataset(split="train")
+    val_ds   = KITTIDataset(split="val")
+
+    assert len(set(train_ds.ids) & set(val_ds.ids)) == 0, "LEAK: train and val share IDs!"
+    print(f"  No overlap. Train={len(train_ds)}  Val={len(val_ds)}")
+
+    sample = train_ds[0]
+    print(f"    image shape : {sample['image'].shape}")
+    print(f"    boxes       : {sample['boxes'].shape}")
+    print(f"    labels      : {sample['labels']}")

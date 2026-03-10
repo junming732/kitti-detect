@@ -1,4 +1,4 @@
-# 🚗 KITTI Object Detection — YOLOv8 + DETR
+#  KITTI Object Detection — YOLOv8 + DETR
 
 > Fine-tuning state-of-the-art object detectors on the KITTI autonomous driving dataset with real-time bounding box visualization.
 
@@ -9,13 +9,13 @@
 
 ---
 
-## 📌 Project Overview
+##  Project Overview
 
 This project fine-tunes **YOLOv8** and **DETR (DEtection TRansformer)** on the KITTI autonomous driving dataset to detect:
-- 🚗 Cars
-- 🚶 Pedestrians  
-- 🚴 Cyclists
-- 🚐 Vans, Trucks
+-  Cars
+-  Pedestrians  
+-  Cyclists
+-  Vans, Trucks
 
 It includes a **visualization pipeline** that overlays bounding boxes on video frames, suitable for real-time inference demos.
 
@@ -50,7 +50,7 @@ kitti-detection/
 
 ---
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### 1. Install Dependencies
 ```bash
@@ -90,7 +90,7 @@ python scripts/evaluate.py --model yolo --weights runs/yolo/best.pt
 
 ---
 
-## 📊 KITTI Dataset
+##  KITTI Dataset
 
 | Split | Images | Labels |
 |-------|--------|--------|
@@ -105,7 +105,7 @@ python scripts/evaluate.py --model yolo --weights runs/yolo/best.pt
 
 ---
 
-## 🏗 Model Architectures
+##  Model Architectures
 
 ### YOLOv8 (Ultralytics)
 - Backbone: CSPDarknet + C2f modules
@@ -121,17 +121,13 @@ python scripts/evaluate.py --model yolo --weights runs/yolo/best.pt
 
 ---
 
-## 📈 Results (Expected Benchmarks)
+##  Results (Expected Benchmarks)
 
-| Model    | mAP@0.5 | Car AP | Pedestrian AP | Cyclist AP | FPS (GPU) |
-|----------|---------|--------|---------------|------------|-----------|
-| YOLOv8n  | ~72%    | ~85%   | ~65%          | ~62%       | ~120      |
-| YOLOv8m  | ~81%    | ~91%   | ~74%          | ~71%       | ~60       |
-| DETR-R50 | ~76%    | ~88%   | ~69%          | ~65%       | ~28       |
+
 
 ---
 
-## 🎥 Visualization Features
+##  Visualization Features
 
 - **Color-coded boxes** by class (Car=blue, Pedestrian=green, Cyclist=yellow)
 - **Confidence scores** displayed per detection
@@ -141,7 +137,7 @@ python scripts/evaluate.py --model yolo --weights runs/yolo/best.pt
 
 ---
 
-## 🔑 Key Skills Demonstrated
+## Key Skills Demonstrated
 
 - Fine-tuning pre-trained models on domain-specific data
 - KITTI dataset parsing (unique `.txt` annotation format)
@@ -152,7 +148,7 @@ python scripts/evaluate.py --model yolo --weights runs/yolo/best.pt
 
 ---
 
-## 📚 References
+## References
 
 - [KITTI Dataset](http://www.cvlibs.net/datasets/kitti/)
 - [YOLOv8 Docs](https://docs.ultralytics.com)

@@ -151,3 +151,21 @@ if __name__ == "__main__":
     print("\n Training complete!")
     print(f"   Best weights: {best_weights}")
     print(f"   Results:      {Path(args.project) / args.name}")
+
+    # Auto-generate training plots
+    run_dir = str(Path(args.project) / args.name)
+    print("\n[INFO] Generating training plots...")
+    try:
+        from scripts.plot_training import (
+            load_yolo_results,
+            plot_training_dashboard_yolo,
+            plot_loss_curves_yolo,
+            plot_map_curves_yolo,
+        )
+        df = load_yolo_results(run_dir)
+        plot_training_dashboard_yolo(df)
+        plot_loss_curves_yolo(df)
+        plot_map_curves_yolo(df)
+        print("[INFO] Plots saved to results/plots/")
+    except Exception as e:
+        print(f"[WARN] Plotting failed: {e}")

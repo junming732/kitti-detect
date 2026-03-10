@@ -63,3 +63,4 @@ kaggle.json
 *.out
 *.err
 slurm-*.out
+slurm*

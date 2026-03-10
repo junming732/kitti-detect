@@ -41,10 +41,7 @@ from utils.metrics import compute_map
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Fine-tune DETR on KITTI")
-    parser.add_argument("--images-train", type=str, required=True)
-    parser.add_argument("--labels-train", type=str, required=True)
-    parser.add_argument("--images-val",   type=str, required=True)
-    parser.add_argument("--labels-val",   type=str, required=True)
+    # Paths come from utils/paths.py (.env) — no need to pass them as arguments
     parser.add_argument("--model-name",   type=str,
                         default="facebook/detr-resnet-50",
                         help="HuggingFace model ID")
@@ -103,14 +100,10 @@ class DETRTrainer:
         print("[DETR] Building datasets...")
 
         self.train_dataset = KITTIDatasetDETR(
-            images_dir=args.images_train,
-            labels_dir=args.labels_train,
             split="train",
             img_size=args.imgsz,
         )
         self.val_dataset = KITTIDatasetDETR(
-            images_dir=args.images_val,
-            labels_dir=args.labels_val,
             split="val",
             img_size=args.imgsz,
         )
@@ -256,7 +249,7 @@ class DETRTrainer:
         if is_best:
             best_path = self.output_dir / "best.pt"
             torch.save(checkpoint, best_path)
-            print(f"  New best model saved → {best_path}")
+            print(f"   New best model saved → {best_path}")
 
         return path
 
@@ -299,9 +292,34 @@ class DETRTrainer:
                 best_map = metrics["val/mAP50"]
             self.save_checkpoint(epoch, metrics, is_best=is_best)
 
+        # Save full history to JSON (used by plot_training.py)
+        import json
+        history_path = self.output_dir / "history.json"
+        with open(history_path, "w") as f:
+            json.dump(history, f, indent=2)
+        print(f"   History saved: {history_path}")
+
         print(f"\n{'='*50}")
         print(f" Training complete! Best mAP@50: {best_map:.4f}")
         print(f"   Best weights: {self.output_dir / 'best.pt'}")
+
+        # Auto-generate training plots
+        print("\n[INFO] Generating training plots...")
+        try:
+            from scripts.plot_training import (
+                load_detr_history,
+                plot_training_dashboard_detr,
+                plot_loss_curves_detr,
+                plot_map_curves_detr,
+            )
+            h = load_detr_history(str(self.output_dir))
+            plot_training_dashboard_detr(h)
+            plot_loss_curves_detr(h)
+            plot_map_curves_detr(h)
+            print("[INFO] Plots saved to results/plots/")
+        except Exception as e:
+            print(f"[WARN] Plotting failed: {e}")
+
         return history
 
 

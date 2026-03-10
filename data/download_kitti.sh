@@ -1,77 +1,70 @@
 #!/usr/bin/env bash
 # data/download_kitti.sh
 #
-# Download and extract the KITTI 2D Object Detection dataset into nobackup.
-# That's all this script does — no splitting, no symlinks.
-# The train/val split is handled automatically by KITTIDataset in kitti_dataset.py.
-#
-# After this script you will have:
-#   $NOBACKUP/kitti-detect-data/kitti/training/image_2/   (7,481 images)
-#   $NOBACKUP/kitti-detect-data/kitti/training/label_2/   (7,481 label files)
+# Downloads KITTI and converts to YOLO format in one go.
+# Re-runnable — skips steps that are already done.
 #
 # Usage:
 #   bash data/download_kitti.sh
 
 set -e
 
+PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NOBACKUP="/proj/uppmax2025-2-346/nobackup/private/junming"
 DATA_DIR="$NOBACKUP/kitti-detect-data/kitti"
+YOLO_DIR="$NOBACKUP/kitti-detect-data/kitti_yolo"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  KITTI Dataset Download"
-echo "  Target: $DATA_DIR"
+echo "  KITTI Dataset Setup"
+echo "  Raw data : $DATA_DIR"
+echo "  YOLO fmt : $YOLO_DIR"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# ── Option A: Official download (requires free KITTI account) ─────────────────
-# Register atsouthen download:
-#   Left color images of object data set  (data_object_image_2.zip, ~12 GB)
-#   Training labels of object data set    (data_object_label_2.zip,  ~5 MB)
-# Transfer to Rackham with scp, then uncomment and run:
-#
-# mkdir -p "$DATA_DIR"
-# cd "$DATA_DIR"
+# ── Step 1: Download ──────────────────────────────────────────────────────────
+# Uncomment ONE of the options below, then re-run this script.
+
+# Option A — Official KITTI (requires free account at cvlibs.net/datasets/kitti)
+# scp your downloaded zips to Rackham first, then:
+# mkdir -p "$DATA_DIR" && cd "$DATA_DIR"
 # unzip data_object_image_2.zip
 # unzip data_object_label_2.zip
 
-# ── Option B: Kaggle mirror (no account needed) ───────────────────────────────
-# pip install kaggle
-# Set up ~/.kaggle/kaggle.json with your API key, then uncomment:
-#
-#  mkdir -p "$DATA_DIR"
-#  cd "$DATA_DIR"
-#  kaggle datasets download -d harshitjain16/kitti-dataset
-#  unzip -q kitti-dataset.zip
-#  rm kitti-dataset.zip
-kaggle datasets download -d ibrahimalobaid/kitte-dataset \
-  --unzip \
-  -p /proj/uppmax2025-2-346/nobackup/private/junming/kitti-detect-data/kitti/
+# Option B — Kaggle mirror (ibrahimalobaid/kitte-dataset, verified structure)
+# mkdir -p "$DATA_DIR"
+# kaggle datasets download -d ibrahimalobaid/kitte-dataset --unzip -p "$DATA_DIR"
 
-# ── Verify ────────────────────────────────────────────────────────────────────
-if [ -d "$DATA_DIR/training/image_2" ] && [ -d "$DATA_DIR/training/label_2" ]; then
-    N_IMG=$(ls "$DATA_DIR/training/image_2" | wc -l)
-    N_LBL=$(ls "$DATA_DIR/training/label_2" | wc -l)
+# ── Step 2: Verify raw data ───────────────────────────────────────────────────
+if [ ! -d "$DATA_DIR/training/image_2" ] || [ ! -d "$DATA_DIR/training/label_2" ]; then
     echo ""
-    echo " Dataset ready: $N_IMG images, $N_LBL labels"
-    echo ""
-    echo "Next steps:"
-    echo ""
-    echo "  # For DETR / custom training — dataset handles split automatically:"
-    echo "  python data/kitti_dataset.py $DATA_DIR/training/image_2 \\"
-    echo "                               $DATA_DIR/training/label_2"
-    echo ""
-    echo "  # For YOLOv8 — convert to YOLO format on disk:"
-    echo "  python -c \""
-    echo "  from data.kitti_dataset import convert_kitti_to_yolo"
-    echo "  D = '$DATA_DIR/training'"
-    echo "  OUT = '$NOBACKUP/kitti-detect-data/kitti_yolo'"
-    echo "  convert_kitti_to_yolo(D+'/image_2', D+'/label_2', OUT, split='train')"
-    echo "  convert_kitti_to_yolo(D+'/image_2', D+'/label_2', OUT, split='val')"
-    echo "  \""
-    echo ""
-    echo "  # Then train:"
-    echo "  python models/yolo_trainer.py --epochs 50 --batch 16"
+    echo "⏳ Raw data not found at $DATA_DIR/training/"
+    echo "   Uncomment Option A or B above and re-run."
+    exit 0
+fi
+
+N_IMG=$(ls "$DATA_DIR/training/image_2" | wc -l)
+N_LBL=$(ls "$DATA_DIR/training/label_2" | wc -l)
+echo ""
+echo " Raw data: $N_IMG images, $N_LBL labels"
+
+# ── Step 3: Convert to YOLO format ───────────────────────────────────────────
+if [ -d "$YOLO_DIR/images/train" ] && [ -d "$YOLO_DIR/images/val" ]; then
+    echo " YOLO format already exists at $YOLO_DIR — skipping conversion."
 else
     echo ""
-    echo " Data not found at $DATA_DIR/training/"
-    echo "   Uncomment Option A or Option B above, then re-run this script."
+    echo "Converting to YOLO format..."
+    source "$PROJECT_ROOT/venv/bin/activate"
+    cd "$PROJECT_ROOT"
+    python - << PYEOF
+from data.kitti_dataset import convert_kitti_to_yolo
+convert_kitti_to_yolo('train')
+convert_kitti_to_yolo('val')
+PYEOF
+    echo " YOLO conversion done."
 fi
+
+# ── Done ──────────────────────────────────────────────────────────────────────
+echo ""
+echo " All done! Ready to train."
+echo ""
+echo "  YOLOv8:  python models/yolo_trainer.py --epochs 50 --batch 16"
+echo "  DETR:    python models/detr_trainer.py --epochs 30 --batch 8"
