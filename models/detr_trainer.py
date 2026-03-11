@@ -18,6 +18,9 @@ import sys
 import time
 from pathlib import Path
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_PROJECT_ROOT / "scripts"))
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -28,6 +31,8 @@ from transformers import (
     DetrImageProcessor,
 )
 from tqdm import tqdm
+import sys as _sys
+tqdm = lambda *a, **kw: __import__("tqdm").tqdm(*a, **{**kw, "file": _sys.stderr})
 
 # Local imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -35,39 +40,114 @@ from data.kitti_dataset import KITTIDatasetDETR, collate_fn_detr, CLASS_NAMES
 from utils.metrics import compute_map
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Argument Parser
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+
+def load_yaml_config(path: str) -> dict:
+    """Load a YAML config file and return as a flat dict."""
+    import yaml
+    with open(path) as f:
+        cfg = yaml.safe_load(f)
+    # Flatten class_names list to a joined string for display only
+    cfg.pop("class_names", None)
+    cfg.pop("notes", None)
+    return cfg
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Fine-tune DETR on KITTI")
-    # Paths come from utils/paths.py (.env) — no need to pass them as arguments
-    parser.add_argument("--model-name",   type=str,
-                        default="facebook/detr-resnet-50",
-                        help="HuggingFace model ID")
-    parser.add_argument("--epochs",       type=int, default=30)
-    parser.add_argument("--batch",        type=int, default=8)
-    parser.add_argument("--lr",           type=float, default=1e-4)
-    parser.add_argument("--lr-backbone",  type=float, default=1e-5,
-                        help="Separate (lower) LR for backbone")
-    parser.add_argument("--weight-decay", type=float, default=1e-4)
-    parser.add_argument("--imgsz",        type=int, default=640)
-    parser.add_argument("--workers",      type=int, default=4)
-    parser.add_argument("--device",       type=str, default="cuda")
-    parser.add_argument("--output-dir",   type=str, default="runs/detr/kitti")
-    parser.add_argument("--resume",       type=str, default=None,
+    parser.add_argument("--config", type=str,
+                        default="configs/detr_kitti.yaml",
+                        help="Path to YAML config. CLI args override YAML values.")
+    parser.add_argument("--model-name",   type=str,   default=None)
+    parser.add_argument("--epochs",       type=int,   default=None)
+    parser.add_argument("--batch",        type=int,   default=None)
+    parser.add_argument("--lr",           type=float, default=None)
+    parser.add_argument("--lr-backbone",  type=float, default=None)
+    parser.add_argument("--weight-decay", type=float, default=None)
+    parser.add_argument("--imgsz",        type=int,   default=None)
+    parser.add_argument("--workers",      type=int,   default=None)
+    parser.add_argument("--device",       type=str,   default=None)
+    parser.add_argument("--output-dir",   type=str,   default=None)
+    parser.add_argument("--resume",       type=str,   default=None,
                         help="Path to checkpoint to resume from")
-    return parser.parse_args()
+
+    args = parser.parse_args()
+
+    # Load YAML defaults
+    import os
+    cfg = {}
+    if args.config and os.path.exists(args.config):
+        cfg = load_yaml_config(args.config)
+        print(f"[DETR] Loaded config: {args.config}")
+    else:
+        print(f"[DETR] Config not found: {args.config} -- using defaults")
+
+    # YAML key -> argparse attr mapping
+    yaml_to_arg = {
+        "model_name":    "model_name",
+        "epochs":        "epochs",
+        "batch":         "batch",
+        "lr":            "lr",
+        "lr_backbone":   "lr_backbone",
+        "weight_decay":  "weight_decay",
+        "imgsz":         "imgsz",
+        "num_workers":   "workers",
+        "device":        "device",
+        "output_dir":    "output_dir",
+        "amp":           "amp",
+        "grad_clip":     "grad_clip",
+        "conf_threshold":"conf_threshold",
+        "iou_threshold": "iou_threshold",
+        "save_every":    "save_every",
+        "warmup_epochs": "warmup_epochs",
+    }
+
+    # Apply YAML values as defaults (CLI args take priority)
+    for yaml_key, arg_key in yaml_to_arg.items():
+        if yaml_key in cfg:
+            if getattr(args, arg_key, None) is None:
+                setattr(args, arg_key, cfg[yaml_key])
+
+    # Hard defaults for anything still None
+    defaults = {
+        "model_name":    "facebook/detr-resnet-50",
+        "epochs":        30,
+        "batch":         8,
+        "lr":            1e-4,
+        "lr_backbone":   1e-5,
+        "weight_decay":  1e-4,
+        "imgsz":         640,
+        "workers":       4,
+        "device":        "cuda",
+        "output_dir":    "runs/detr/kitti",
+        "amp":           True,
+        "grad_clip":     0.1,
+        "conf_threshold":0.5,
+        "iou_threshold": 0.5,
+        "save_every":    5,
+        "warmup_epochs": 2,
+    }
+    for key, val in defaults.items():
+        if getattr(args, key, None) is None:
+            setattr(args, key, val)
+
+    return args
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Training Loop
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class DETRTrainer:
     def __init__(self, args):
         self.args = args
-        self.device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+        # Normalise device string: "0" -> "cuda:0", "cuda" -> "cuda"
+        device_str = args.device
+        if device_str.isdigit():
+            device_str = f"cuda:{device_str}"
+        self.device = torch.device(device_str if torch.cuda.is_available() else "cpu")
         self.output_dir = Path(args.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -83,7 +163,7 @@ class DETRTrainer:
         # Load image processor
         self.processor = DetrImageProcessor.from_pretrained(args.model_name)
 
-        # Load model — we REPLACE the classification head for KITTI classes
+        # Load model ? we REPLACE the classification head for KITTI classes
         self.model = DetrForObjectDetection.from_pretrained(
             args.model_name,
             num_labels=len(CLASS_NAMES),
@@ -146,7 +226,7 @@ class DETRTrainer:
         self.scheduler = CosineAnnealingLR(
             self.optimizer, T_max=args.epochs, eta_min=1e-6
         )
-        self.scaler = torch.cuda.amp.GradScaler()  # Mixed precision
+        self.scaler = torch.amp.GradScaler("cuda")  # Mixed precision
 
     def train_one_epoch(self, epoch: int) -> dict:
         self.model.train()
@@ -183,12 +263,14 @@ class DETRTrainer:
             total_loss_bbox += loss_dict.get("loss_bbox", 0)
             total_loss_giou += loss_dict.get("loss_giou", 0)
 
-            pbar.set_postfix({
-                "loss": f"{loss.item():.4f}",
-                "ce": f"{loss_dict.get('loss_ce', 0):.3f}",
-                "bbox": f"{loss_dict.get('loss_bbox', 0):.3f}",
-                "giou": f"{loss_dict.get('loss_giou', 0):.3f}",
-            })
+            # Update tqdm every 10 steps to avoid WandB stdout conflict under SLURM
+            if step % 10 == 0:
+                pbar.set_postfix({
+                    "loss": f"{loss.item():.4f}",
+                    "ce": f"{loss_dict.get('loss_ce', 0):.3f}",
+                    "bbox": f"{loss_dict.get('loss_bbox', 0):.3f}",
+                    "giou": f"{loss_dict.get('loss_giou', 0):.3f}",
+                })
 
         n = len(self.train_loader)
         return {
@@ -224,7 +306,38 @@ class DETRTrainer:
 
         # mAP calculation
         try:
-            map_score = compute_map(all_predictions, all_targets, num_classes=len(CLASS_NAMES))
+            # Convert DETR list format ? dict format expected by compute_map
+            # predictions: {img_id: [{"box": [x1,y1,x2,y2], "conf": float, "class_id": int}]}
+            # ground_truths: {img_id: [{"box": [x1,y1,x2,y2], "class_id": int}]}
+            pred_dict = {}
+            gt_dict   = {}
+            for img_id, (pred, target) in enumerate(zip(all_predictions, all_targets)):
+                pred_dict[img_id] = [
+                    {
+                        "box":      [float(box[0]), float(box[1]),
+                                     float(box[2]), float(box[3])],
+                        "conf":     float(score),
+                        "class_id": int(label),
+                    }
+                    for box, score, label in zip(
+                        pred["boxes"], pred["scores"], pred["labels"]
+                    )
+                ]
+                boxes  = target["boxes"]   # (N, 4) tensor in cxcywh normalised
+                labels = target["class_labels"]
+                H = W  = self.args.imgsz   # convert cxcywh norm -> xyxy pixels
+                gt_dict[img_id] = []
+                for box, label in zip(boxes, labels):
+                    cx, cy, w, h = box.tolist()
+                    x1 = (cx - w / 2) * W
+                    y1 = (cy - h / 2) * H
+                    x2 = (cx + w / 2) * W
+                    y2 = (cy + h / 2) * H
+                    gt_dict[img_id].append({
+                        "box":      [x1, y1, x2, y2],
+                        "class_id": int(label),
+                    })
+            map_score, _ = compute_map(pred_dict, gt_dict, num_classes=len(CLASS_NAMES))
         except Exception as e:
             print(f"[DETR] mAP computation failed: {e}")
             map_score = 0.0
@@ -249,7 +362,7 @@ class DETRTrainer:
         if is_best:
             best_path = self.output_dir / "best.pt"
             torch.save(checkpoint, best_path)
-            print(f"   New best model saved → {best_path}")
+            print(f"  [OK] New best model saved ? {best_path}")
 
         return path
 
@@ -258,7 +371,7 @@ class DETRTrainer:
         best_map = 0.0
         history = []
 
-        print(f"\n[DETR] Starting training: {args.epochs} epochs\n{'─'*50}")
+        print(f"\n[DETR] Starting training: {args.epochs} epochs\n{'-'*50}")
 
         for epoch in range(args.epochs):
             t0 = time.time()
@@ -294,19 +407,38 @@ class DETRTrainer:
 
         # Save full history to JSON (used by plot_training.py)
         import json
+
+        def to_python(obj):
+            """Recursively convert tensors/numpy to plain Python types."""
+            import numpy as np
+            if isinstance(obj, dict):
+                return {k: to_python(v) for k, v in obj.items()}
+            if isinstance(obj, (list, tuple)):
+                return [to_python(v) for v in obj]
+            if isinstance(obj, torch.Tensor):
+                return obj.item() if obj.numel() == 1 else obj.tolist()
+            if isinstance(obj, np.generic):
+                return obj.item()
+            return obj
+
         history_path = self.output_dir / "history.json"
         with open(history_path, "w") as f:
-            json.dump(history, f, indent=2)
+            json.dump(to_python(history), f, indent=2)
         print(f"   History saved: {history_path}")
 
         print(f"\n{'='*50}")
-        print(f" Training complete! Best mAP@50: {best_map:.4f}")
+        print(f"[OK] Training complete! Best mAP@50: {best_map:.4f}")
         print(f"   Best weights: {self.output_dir / 'best.pt'}")
 
         # Auto-generate training plots
         print("\n[INFO] Generating training plots...")
         try:
-            from scripts.plot_training import (
+            project_root = Path(__file__).resolve().parent.parent
+            scripts_dir  = str(project_root / "scripts")
+            print(f"[INFO] Adding to path: {scripts_dir}")
+            if scripts_dir not in sys.path:
+                sys.path.insert(0, scripts_dir)
+            from plot_training import (
                 load_detr_history,
                 plot_training_dashboard_detr,
                 plot_loss_curves_detr,
@@ -323,9 +455,9 @@ class DETRTrainer:
         return history
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Entry point
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
     args = parse_args()

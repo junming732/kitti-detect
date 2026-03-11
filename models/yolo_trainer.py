@@ -15,7 +15,10 @@ import os
 import sys
 from pathlib import Path
 
-# ── Optional: WandB experiment tracking ───────────────────────────────────────
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_PROJECT_ROOT / "scripts"))
+
+# -- Optional: WandB experiment tracking ---------------------------------------
 try:
     import wandb
     WANDB_AVAILABLE = True
@@ -48,7 +51,7 @@ def parse_args():
 
 
 def train(args):
-    # ── WandB Setup ───────────────────────────────────────────────────────────
+    # -- WandB Setup -----------------------------------------------------------
     if WANDB_AVAILABLE and not args.no_wandb:
         wandb.init(
             project="kitti-object-detection",
@@ -59,11 +62,11 @@ def train(args):
     else:
         os.environ["WANDB_MODE"] = "disabled"
 
-    # ── Load Model ────────────────────────────────────────────────────────────
+    # -- Load Model ------------------------------------------------------------
     print(f"[INFO] Loading model: {args.model}")
     model = YOLO(args.model)
 
-    # ── Train ─────────────────────────────────────────────────────────────────
+    # -- Train -----------------------------------------------------------------
     print(f"[INFO] Starting training for {args.epochs} epochs...")
     results = model.train(
         data=args.data,
@@ -103,7 +106,7 @@ def evaluate(args, weights_path: str):
     model = YOLO(weights_path)
     metrics = model.val(data=args.data, imgsz=args.imgsz, device=args.device)
 
-    print("\n── Validation Metrics ──────────────────────────────")
+    print("\n-- Validation Metrics ------------------------------")
     print(f"  mAP@50:    {metrics.box.map50:.4f}")
     print(f"  mAP@50-95: {metrics.box.map:.4f}")
     print(f"  Precision: {metrics.box.mp:.4f}")
@@ -117,7 +120,7 @@ def evaluate(args, weights_path: str):
             from data.kitti_dataset import CLASS_NAMES
             name = CLASS_NAMES[i] if i < len(CLASS_NAMES) else f"class_{i}"
             print(f"    {name:<15}: {ap:.4f}")
-    print("─" * 50)
+    print("-" * 50)
     return metrics
 
 
@@ -148,7 +151,7 @@ if __name__ == "__main__":
         # Export to ONNX for deployment
         export_model(str(best_weights), format="onnx")
 
-    print("\n Training complete!")
+    print("\n[OK] Training complete!")
     print(f"   Best weights: {best_weights}")
     print(f"   Results:      {Path(args.project) / args.name}")
 
@@ -156,7 +159,11 @@ if __name__ == "__main__":
     run_dir = str(Path(args.project) / args.name)
     print("\n[INFO] Generating training plots...")
     try:
-        from scripts.plot_training import (
+        scripts_dir = str(project_root.resolve() / "scripts")
+        print(f"[INFO] Adding to path: {scripts_dir}")
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        from plot_training import (
             load_yolo_results,
             plot_training_dashboard_yolo,
             plot_loss_curves_yolo,

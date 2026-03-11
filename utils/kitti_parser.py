@@ -16,7 +16,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 
 
-# KITTI class mapping → YOLO class indices
+# KITTI class mapping ? YOLO class indices
 KITTI_CLASSES = {
     "Car": 0,
     "Pedestrian": 1,
@@ -30,12 +30,12 @@ KITTI_CLASSES = {
 }
 
 CLASS_COLORS = {
-    0: (255, 100, 0),    # Car — orange
-    1: (0, 220, 50),     # Pedestrian — green
-    2: (255, 220, 0),    # Cyclist — yellow
-    3: (180, 0, 255),    # Van — purple
-    4: (0, 120, 255),    # Truck — blue
-    5: (150, 150, 150),  # Misc — gray
+    0: (255, 100, 0),    # Car ? orange
+    1: (0, 220, 50),     # Pedestrian ? green
+    2: (255, 220, 0),    # Cyclist ? yellow
+    3: (180, 0, 255),    # Van ? purple
+    4: (0, 120, 255),    # Truck ? blue
+    5: (150, 150, 150),  # Misc ? gray
 }
 
 CLASS_NAMES = ["Car", "Pedestrian", "Cyclist", "Van", "Truck", "Misc"]
@@ -121,7 +121,7 @@ def parse_kitti_label_file(label_path: str) -> List[KITTIObject]:
     return objects
 
 
-def parse_kitti_split(
+def parse_kitti_folder(
     images_dir: str,
     labels_dir: str,
     filter_classes: Optional[List[str]] = None,
@@ -130,7 +130,9 @@ def parse_kitti_split(
     max_occlusion: int = 2,
 ) -> List[dict]:
     """
-    Parse an entire KITTI split (train or val) into a list of samples.
+    Scan an entire KITTI folder and return all samples as a list.
+    Used for EDA / statistics ? not for train/val splitting.
+    For train/val splitting use KITTIDataset in data/kitti_dataset.py.
 
     Args:
         images_dir:      Directory containing .png images.
@@ -203,7 +205,7 @@ if __name__ == "__main__":
         print("Usage: python kitti_parser.py <images_dir> <labels_dir>")
         sys.exit(1)
 
-    samples = parse_kitti_split(sys.argv[1], sys.argv[2])
+    samples = parse_kitti_folder(sys.argv[1], sys.argv[2])
     dist = get_class_distribution(samples)
     print(f"Parsed {len(samples)} samples")
     print("Class distribution:", dist)

@@ -1,0 +1,80 @@
+# configs/detr_kitti.yaml
+# DETR (DEtection TRansformer) training configuration for KITTI
+
+# -- Model --------------------------------------------------------------------
+model_name: facebook/detr-resnet-50   # HuggingFace model ID
+num_labels: 6                          # Car, Pedestrian, Cyclist, Van, Truck, Misc
+pretrained: true
+ignore_mismatched_sizes: true          # Replaces COCO head (91 classes) with KITTI head (6)
+
+# -- Dataset (nobackup storage) -----------------------------------------------
+images_train: /proj/uppmax2025-2-346/nobackup/private/junming/kitti-detect-data/kitti/splits/train/image_2
+labels_train: /proj/uppmax2025-2-346/nobackup/private/junming/kitti-detect-data/kitti/splits/train/label_2
+images_val:   /proj/uppmax2025-2-346/nobackup/private/junming/kitti-detect-data/kitti/splits/val/image_2
+labels_val:   /proj/uppmax2025-2-346/nobackup/private/junming/kitti-detect-data/kitti/splits/val/label_2
+
+# -- Classes ------------------------------------------------------------------
+class_names:
+  - Car
+  - Pedestrian
+  - Cyclist
+  - Van
+  - Truck
+  - Misc
+
+# -- Training Hyperparameters -------------------------------------------------
+epochs: 30
+batch: 8                              # DETR is memory-heavy; reduce to 4 if OOM
+imgsz: 640
+num_workers: 4
+
+# Learning rates (two-stage: lower for backbone, higher for transformer)
+lr: 1.0e-4                            # Transformer + heads
+lr_backbone: 1.0e-5                   # ResNet-50 backbone (frozen first few layers)
+weight_decay: 1.0e-4
+warmup_epochs: 2
+
+# Scheduler
+scheduler: cosine                     # cosine annealing
+eta_min: 1.0e-6
+
+# -- Loss Weights -------------------------------------------------------------
+# Hungarian matching losses
+loss_ce_weight: 1.0                   # Classification cross-entropy
+loss_bbox_weight: 5.0                 # L1 bounding-box regression
+loss_giou_weight: 2.0                 # Generalized IoU loss
+eos_coef: 0.1                         # Background class weight (keep low)
+
+# -- DETR Transformer ----------------------------------------------------------
+num_queries: 100                      # Object query slots (100 is DETR default)
+encoder_layers: 6
+decoder_layers: 6
+d_model: 256
+nhead: 8
+dim_feedforward: 2048
+dropout: 0.1
+
+# -- Training Setup -----------------------------------------------------------
+device: "cuda"                           # GPU index or "cpu"
+amp: true                             # Mixed precision (saves ~40% GPU memory)
+grad_clip: 0.1                        # Gradient clipping (critical for transformers)
+output_dir: /proj/uppmax2025-2-346/nobackup/private/junming/kitti-detect-data/runs/detr/kitti
+
+# -- Checkpointing -------------------------------------------------------------
+save_every: 5                         # Save checkpoint every N epochs
+keep_last: 3                          # Keep only last N checkpoints
+
+# -- Evaluation ---------------------------------------------------------------
+conf_threshold: 0.5                   # Post-process score threshold
+iou_threshold:  0.5                   # mAP IoU threshold
+val_every: 1                          # Validate every N epochs
+
+# -- Notes --------------------------------------------------------------------
+# Expected training time on A100 (40GB): ~4 hours for 30 epochs, batch=8
+# Expected training time on V100 (16GB): ~8 hours for 30 epochs, batch=4
+# Expected mAP@50 after fine-tuning: ~74-78%
+#
+# DETR is slower to converge than YOLO but provides:
+#   - Global context via self-attention
+#   - No NMS post-processing needed
+#   - Better small-object detection at higher epochs
