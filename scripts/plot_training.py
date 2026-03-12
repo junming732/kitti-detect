@@ -89,10 +89,34 @@ CLS_COLORS_MPL = {
 # -----------------------------------------------------------------------------
 
 def load_yolo_results(run_dir: str) -> pd.DataFrame:
-    """Load YOLOv8 results.csv produced by Ultralytics."""
-    csv_path = Path(run_dir) / "results.csv"
+    """
+    Load YOLOv8 results.csv produced by Ultralytics.
+    Ultralytics auto-increments run dirs (kitti, kitti2, kitti3 ...).
+    If results.csv is not found in run_dir directly, search the parent
+    for the most recently modified matching directory.
+    """
+    run_path = Path(run_dir)
+    csv_path = run_path / "results.csv"
+
     if not csv_path.exists():
-        raise FileNotFoundError(f"YOLO results CSV not found: {csv_path}")
+        # Search parent dir for latest run with same base name
+        parent   = run_path.parent
+        base     = run_path.name
+        candidates = sorted(
+            [d for d in parent.iterdir()
+             if d.is_dir() and d.name.startswith(base) and (d / "results.csv").exists()],
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        if candidates:
+            csv_path = candidates[0] / "results.csv"
+            print(f"[plots] Auto-detected run dir: {candidates[0]}")
+        else:
+            raise FileNotFoundError(
+                f"YOLO results CSV not found in {run_path} or any {base}* sibling. "
+                f"Make sure training completed and the run dir is correct."
+            )
+
     df = pd.read_csv(csv_path)
     df.columns = df.columns.str.strip()
     print(f"[plots] Loaded YOLO results: {len(df)} epochs from {csv_path}")
@@ -162,7 +186,7 @@ def plot_loss_curves_detr(history: List[dict], save_path: Optional[str] = None) 
         ax.set_ylabel("Loss")
         ax.legend()
 
-    fig.suptitle("DETR ? Training Losses", fontsize=14, fontweight="bold", y=1.02)
+    fig.suptitle("DETR - Training Losses", fontsize=14, fontweight="bold", y=1.02)
     fig.tight_layout()
     _save(fig, save_path or str(PLOTS_DIR / "detr_loss_curves.png"))
     return fig
@@ -250,7 +274,7 @@ def plot_map_curves_detr(history: List[dict], save_path: Optional[str] = None) -
     ax2.set_ylabel("Loss")
     ax2.legend()
 
-    fig.suptitle("DETR ? Validation Metrics", fontsize=14, fontweight="bold", y=1.02)
+    fig.suptitle("DETR - Validation Metrics", fontsize=14, fontweight="bold", y=1.02)
     fig.tight_layout()
     _save(fig, save_path or str(PLOTS_DIR / "detr_map_curves.png"))
     return fig

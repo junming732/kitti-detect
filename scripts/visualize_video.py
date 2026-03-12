@@ -16,9 +16,12 @@ Usage:
     python scripts/visualize_video.py \
         --model yolo \
         --weights runs/yolo/kitti/weights/best.pt \
-        --input data/sample_drive.mp4 \
+        --input /path/to/video_or_image_folder \
         --output results/yolo_output.mp4 \
         --conf 0.4
+
+    # Minimal (uses all defaults)
+    python scripts/visualize_video.py --model yolo --input /path/to/input
 
     # DETR on image folder
     python scripts/visualize_video.py \
@@ -53,9 +56,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.kitti_parser import CLASS_COLORS, CLASS_NAMES
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Drawing Utilities
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def draw_bbox(
     frame: np.ndarray,
@@ -155,9 +158,9 @@ def draw_legend(frame: np.ndarray):
     return frame
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Model Wrappers
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class YOLODetector:
     """YOLOv8 inference wrapper."""
@@ -241,9 +244,9 @@ class DETRDetector:
         return detections
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Video Pipeline
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def get_video_writer(output_path: str, fps: float, width: int, height: int) -> cv2.VideoWriter:
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -272,7 +275,7 @@ def process_video(
     Returns:
         dict with stats: total_frames, avg_fps, total_detections
     """
-    # ── Open video source ─────────────────────────────────────────────────────
+    # -- Open video source -----------------------------------------------------
     is_folder = Path(input_path).is_dir() if not input_path.isdigit() else False
 
     if is_folder:
@@ -296,7 +299,7 @@ def process_video(
         height  = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         frame_iter = iter(lambda: cap.read()[1], None)
 
-    # ── Setup output writer ───────────────────────────────────────────────────
+    # -- Setup output writer ---------------------------------------------------
     writer = None
     if output_path:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -309,7 +312,7 @@ def process_video(
         writer = get_video_writer(output_path, fps_in, w, h)
         print(f"[Visualize] Writing to: {output_path}")
 
-    # ── Processing loop ───────────────────────────────────────────────────────
+    # -- Processing loop -------------------------------------------------------
     frame_count = 0
     total_detections = 0
     fps_times = []
@@ -392,18 +395,18 @@ def process_video(
         "total_detections": total_detections,
         "avg_detections_per_frame": total_detections / max(frame_count, 1),
     }
-    print(f"\n── Stats ────────────────────────────────────")
+    print(f"\n-- Stats ------------------------------------")
     print(f"  Frames processed: {stats['total_frames']}")
     print(f"  Avg FPS:          {stats['avg_fps']:.1f}")
     print(f"  Total detections: {stats['total_detections']}")
     print(f"  Avg per frame:    {stats['avg_detections_per_frame']:.2f}")
-    print(f"─────────────────────────────────────────────")
+    print(f"---------------------------------------------")
     return stats
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # CLI
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -412,12 +415,13 @@ def parse_args():
     )
     parser.add_argument("--model",   type=str, required=True, choices=["yolo", "detr"],
                         help="Model type: yolo or detr")
-    parser.add_argument("--weights", type=str, required=True,
+    parser.add_argument("--weights", type=str,
+                        default="runs/yolo/kitti/weights/best.pt",
                         help="Path to trained weights")
     parser.add_argument("--input",   type=str, required=True,
                         help="Input: video path, image folder, or webcam index (0)")
-    parser.add_argument("--output",  type=str, default=None,
-                        help="Output video path (optional)")
+    parser.add_argument("--output",  type=str, default="results/demo.mp4",
+                        help="Output video path")
     parser.add_argument("--conf",    type=float, default=0.4,
                         help="Confidence threshold [0-1]")
     parser.add_argument("--iou",     type=float, default=0.5,
@@ -456,4 +460,4 @@ if __name__ == "__main__":
     )
 
     if args.output:
-        print(f"\n✅ Output saved to: {args.output}")
+        print(f"\n[OK] Output saved to: {args.output}")
